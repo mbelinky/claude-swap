@@ -44,8 +44,8 @@ from claude_swap.credentials import (  # noqa: F401  (constants re-exported for 
     SECURITY_SERVICE,
     ActiveCredentials,
     CredentialStore,
-    auth_method_label,
-    classify_auth_method,
+    auth_metadata,
+    auth_metadata_summary,
     looks_like_api_key,
     merge_shared_credential_fields,
     shared_credential_fields,
@@ -1486,6 +1486,7 @@ class ClaudeAccountSwitcher:
             n = str(num)
             if is_active:
                 active_number = n
+            auth = auth_metadata(_creds)
             accounts.append(
                 AccountSnapshot(
                     number=n,
@@ -1496,7 +1497,10 @@ class ClaudeAccountSwitcher:
                     kind=self._account_kind(n),
                     switchable=self._account_is_switchable(n),
                     usage=entries[n],
-                    auth_method=classify_auth_method(_creds),
+                    auth_method=auth.method,
+                    auth_scope=auth.scope,
+                    auth_supports_remote_control=auth.supports_remote_control,
+                    auth_expires_at=auth.expires_at,
                     alias=alias,
                     disabled=self._disabled_from_data(seq_data, n),
                 )
@@ -3888,6 +3892,7 @@ class ClaudeAccountSwitcher:
             if is_active:
                 active_num = num
             entry = entries[str(num)]
+            auth = auth_metadata(creds)
             # JSON carries the decision-grade value: last-good only while it is
             # recent enough to act on (≤ STALE_OK_S), else unavailable. Showing
             # older measurements is a human-display affordance only — scripts
@@ -3899,7 +3904,10 @@ class ClaudeAccountSwitcher:
                     usage_fetched_at=entry.fetched_at,
                     usage_age_s=entry.age_s,
                     last_good_usage=entry.last_good,
-                    auth_method=classify_auth_method(creds),
+                    auth_method=auth.method,
+                    auth_scope=auth.scope,
+                    auth_supports_remote_control=auth.supports_remote_control,
+                    auth_expires_at=auth.expires_at,
                     alias=alias,
                     disabled=self._disabled_from_data(seq_data, str(num)),
                 )
@@ -3967,9 +3975,10 @@ class ClaudeAccountSwitcher:
             if self._disabled_from_data(seq_data, str(num)):
                 markers += f" {muted('(disabled)')}"
             print(f"  {num}: {label} {muted(f'[{tag}]')}{markers}")
+            auth = auth_metadata(creds)
             print(
                 f"     {dimmed('Claude Code:')} "
-                f"{muted(auth_method_label(classify_auth_method(creds)))}"
+                f"{muted(auth_metadata_summary(auth))}"
             )
             for line in _usage_entry_lines(entries[str(num)]):
                 print(f"     {line}")

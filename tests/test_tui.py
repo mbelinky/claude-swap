@@ -78,6 +78,9 @@ def make_account(
     switchable: bool = True,
     kind: str = "oauth",
     auth_method: str = "browser_oauth",
+    auth_scope: str = "full",
+    auth_supports_remote_control: bool | None = True,
+    auth_expires_at: str | None = None,
     entry: UsageEntry | None = None,
     email: str | None = None,
     alias: str = "",
@@ -93,6 +96,9 @@ def make_account(
         switchable=switchable,
         usage=entry if entry is not None else make_entry(),
         auth_method=auth_method,
+        auth_scope=auth_scope,
+        auth_supports_remote_control=auth_supports_remote_control,
+        auth_expires_at=auth_expires_at,
         alias=alias,
         disabled=disabled,
     )
@@ -613,8 +619,8 @@ class TestUsageRows:
         )
         acc = make_account(1, active=True, entry=entry)
 
-        wide = account_card_text(acc, 100).plain
-        assert wide.count(" · ") == 3
+        wide_lines = account_card_text(acc, 100).plain.splitlines()
+        assert sum(" · " in line for line in wide_lines if "resets" in line) == 3
 
         mid_lines = account_card_text(acc, 78).plain.splitlines()
         spend_line = next(line for line in mid_lines if "$12.50" in line)
@@ -623,20 +629,36 @@ class TestUsageRows:
             if "resets" in line and "$12.50" not in line:
                 assert " · " in line
 
-        narrow = account_card_text(acc, 40).plain
-        assert " · " not in narrow
+        narrow_lines = account_card_text(acc, 40).plain.splitlines()
+        assert all(" · " not in line for line in narrow_lines if "resets" in line)
 
 
 class TestMiniAccountText:
     def test_auth_method_is_visible_without_repeating_usage(self):
         from claude_swap.tui.widgets import account_card_text, mini_account_text
 
-        active = make_account(1, active=True, auth_method="setup_token")
-        inactive = make_account(2, auth_method="api_key")
-        assert "Claude Code  one-year setup token" in account_card_text(
-            active, 100
+        active = make_account(
+            1,
+            active=True,
+            auth_method="setup_token",
+            auth_scope="inference_only",
+            auth_supports_remote_control=False,
+            auth_expires_at="2027-01-02T03:04:05Z",
+        )
+        inactive = make_account(
+            2,
+            auth_method="api_key",
+            auth_scope="inference_only",
+            auth_supports_remote_control=False,
+        )
+        full = account_card_text(active, 100).plain
+        assert (
+            "Claude Code  setup token · inference only · no Remote Control "
+            "· expires 2027-01-02"
+        ) in full
+        assert "API key · inference only" in mini_account_text(
+            inactive, time.time()
         ).plain
-        assert "API key" in mini_account_text(inactive, time.time()).plain
 
     def test_seven_day_ahead_of_pace_marker(self):
         from claude_swap.tui.widgets import mini_account_text

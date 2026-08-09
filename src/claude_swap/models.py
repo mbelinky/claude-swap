@@ -139,6 +139,9 @@ class AccountSnapshot:
     switchable: bool
     usage: UsageEntry
     auth_method: str = "unknown"
+    auth_scope: str = "unknown"
+    auth_supports_remote_control: bool | None = None
+    auth_expires_at: str | None = None
     alias: str = ""
     disabled: bool = False  # held out of auto-rotation (still a valid explicit target)
 
