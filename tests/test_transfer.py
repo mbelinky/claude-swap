@@ -159,7 +159,7 @@ class TestRoundTrip:
                 import_accounts(dst, str(out_file))
                 record = dst._get_sequence_data()["accounts"]["1"]
                 assert record["authMethods"] == [AUTH_SETUP_TOKEN, AUTH_API_KEY]
-                assert record["preferredAuthMethod"] == AUTH_API_KEY
+                assert record["preferredAuthMethod"] == AUTH_SETUP_TOKEN
                 assert dst._read_auth_method_credentials(
                     "1", "alice@example.com", "", AUTH_SETUP_TOKEN
                 )
