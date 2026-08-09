@@ -123,6 +123,8 @@ AUTH_SCOPE_FULL = "full"
 AUTH_SCOPE_INFERENCE_ONLY = "inference_only"
 AUTH_SCOPE_UNKNOWN = "unknown"
 
+AUTH_CAPABILITY_REMOTE_CONTROL = "remote_control"
+
 AUTH_METHOD_LABELS = {
     AUTH_BROWSER_OAUTH: "browser OAuth",
     AUTH_SETUP_TOKEN: "setup token",
@@ -178,6 +180,13 @@ def auth_method_label(method: str) -> str:
 def auth_scope_label(scope: str) -> str:
     """Return the human label for an authentication scope."""
     return AUTH_SCOPE_LABELS.get(scope, AUTH_SCOPE_LABELS[AUTH_SCOPE_UNKNOWN])
+
+
+def auth_method_supports_capability(method: str, capability: str) -> bool:
+    """Whether a login method can satisfy one explicit Claude Code feature."""
+    if capability == AUTH_CAPABILITY_REMOTE_CONTROL:
+        return method == AUTH_BROWSER_OAUTH
+    return False
 
 
 def auth_metadata(credentials: str | None) -> AuthMetadata:

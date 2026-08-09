@@ -324,6 +324,7 @@ cswap status --json                 # current active account
 cswap switch --strategy best --json # switch, then report the result
 cswap switch 2 --json
 cswap switch 2 --auth-method setup-token
+cswap switch 2 --require-capability remote-control
 ```
 
 <details>
@@ -366,9 +367,12 @@ Remote Control. `authMethods` lists every stored login, while
 `authMethodDetails` reports the capability and expiry of each one. The human
 list and TUI group these logins under one account and show usage once. Use
 `cswap switch N --auth-method setup-token` (or `browser-oauth` / `api-key`) to
-choose a specific default. An account row also carries an additive `alias`
-field once one is set with `cswap alias` (e.g. `"alias": "dev"`); accounts
-without one simply omit the key.
+choose a specific default. Adding another login method does not silently change
+the current default. Use `--require-capability remote-control` when a command
+needs Remote Control; cswap selects browser OAuth or fails before changing the
+active login with instructions to run `claude auth login`. An account row also
+carries an additive `alias` field once one is set with `cswap alias` (e.g.
+`"alias": "dev"`); accounts without one simply omit the key.
 
 Weekly windows (`sevenDay` and per-model `scoped` entries — never `fiveHour`) additively carry pace fields once the week is ~a day old: `expectedPct` (where usage would sit if spread evenly across the week) and `aheadOfPace` (`true` when meaningfully above that — the same signal the human views show as an `(ahead)`/`(ahead of pace)` marker). `projectedExhaustionAt`/`willLastToReset` extrapolate the current rate into an ETA to 100% and a yes/no "will it last to the reset"; they stay `--json`-only since a linear projection is too rough to present as fact in the UI.
 

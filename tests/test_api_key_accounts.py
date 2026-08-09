@@ -197,7 +197,7 @@ class TestAccountAuthMethods:
 
         record = s._get_sequence_data()["accounts"]["1"]
         assert record["authMethods"] == [AUTH_BROWSER_OAUTH, AUTH_SETUP_TOKEN]
-        assert record["preferredAuthMethod"] == AUTH_BROWSER_OAUTH
+        assert record["preferredAuthMethod"] == AUTH_SETUP_TOKEN
 
     def test_api_key_and_setup_token_share_one_account(self, temp_home: Path):
         s = _linux_switcher()
@@ -208,7 +208,7 @@ class TestAccountAuthMethods:
         record = data["accounts"]["1"]
         assert len(data["accounts"]) == 1
         assert record["authMethods"] == [AUTH_SETUP_TOKEN, AUTH_API_KEY]
-        assert record["preferredAuthMethod"] == AUTH_API_KEY
+        assert record["preferredAuthMethod"] == AUTH_SETUP_TOKEN
         assert s._read_auth_method_credentials(
             "1", "dup@example.com", "", AUTH_SETUP_TOKEN
         )
@@ -230,7 +230,7 @@ class TestAccountAuthMethods:
             s._read_account_credentials("1", "dup@example.com")
         ) == AUTH_SETUP_TOKEN
 
-    def test_usage_stays_account_level_when_api_key_is_preferred(
+    def test_usage_stays_account_level_when_api_key_is_also_stored(
         self, temp_home: Path
     ):
         s = _linux_switcher()
@@ -244,12 +244,68 @@ class TestAccountAuthMethods:
 
         assert classify_auth_method(info[0][5]) == AUTH_SETUP_TOKEN
         assert len(snapshot.accounts) == 1
-        assert snapshot.accounts[0].auth_method == AUTH_API_KEY
+        assert snapshot.accounts[0].auth_method == AUTH_SETUP_TOKEN
         assert snapshot.accounts[0].auth_methods == (
             AUTH_SETUP_TOKEN,
             AUTH_API_KEY,
         )
         assert snapshot.accounts[0].usage.sentinel != USAGE_API_KEY
+
+    def test_remote_control_requirement_selects_browser_oauth(
+        self, temp_home: Path
+    ):
+        s = _linux_switcher()
+        s.add_account_from_token(
+            "sk-ant-oat01-setup", email="dup@example.com"
+        )
+        (temp_home / ".claude.json").write_text(
+            json.dumps(
+                {
+                    "oauthAccount": {
+                        "emailAddress": "dup@example.com",
+                        "accountUuid": "account-1",
+                        "organizationUuid": None,
+                        "organizationName": None,
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        get_credentials_path().parent.mkdir(parents=True, exist_ok=True)
+        get_credentials_path().write_text(OAUTH_JSON, encoding="utf-8")
+        s.add_account()
+
+        assert (
+            s._get_sequence_data()["accounts"]["1"]["preferredAuthMethod"]
+            == AUTH_SETUP_TOKEN
+        )
+        s.switch_to("1", force=True, auth_method="setup-token")
+
+        s.switch_to("1", required_capability="remote-control")
+
+        record = s._get_sequence_data()["accounts"]["1"]
+        assert record["preferredAuthMethod"] == AUTH_BROWSER_OAUTH
+        assert classify_auth_method(s._read_credentials()) == AUTH_BROWSER_OAUTH
+
+    def test_remote_control_requirement_rejects_inference_only_account(
+        self, temp_home: Path
+    ):
+        s = _linux_switcher()
+        s.add_account_from_token(
+            "sk-ant-oat01-setup", email="dup@example.com"
+        )
+
+        with pytest.raises(
+            ValidationError,
+            match=(
+                "Remote Control requires browser OAuth for Account-1.*"
+                "claude auth login.*cswap add --slot 1"
+            ),
+        ):
+            s.switch_to("1", required_capability="remote-control")
+
+        record = s._get_sequence_data()["accounts"]["1"]
+        assert record["preferredAuthMethod"] == AUTH_SETUP_TOKEN
 
     def test_active_api_key_uses_oauth_backup_without_replacing_live_login(
         self, temp_home: Path

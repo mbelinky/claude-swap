@@ -21,7 +21,7 @@ import pytest
 
 from claude_swap.autoswitch import NoSwitchEvent, SwitchEvent
 from claude_swap.json_output import USAGE_API_KEY, USAGE_TOKEN_EXPIRED
-from claude_swap.models import AccountSnapshot, AccountsSnapshot
+from claude_swap.models import AccountSnapshot, AccountsSnapshot, AuthMethodSnapshot
 from claude_swap.switcher import ClaudeAccountSwitcher
 from claude_swap.tui import data as tui_data
 from claude_swap.usage_store import UsageEntry
@@ -667,12 +667,24 @@ class TestMiniAccountText:
         acc = dataclasses.replace(
             acc,
             auth_methods=("browser_oauth", "setup_token", "api_key"),
+            auth_method_details=(
+                AuthMethodSnapshot("browser_oauth", "full", True, None),
+                AuthMethodSnapshot(
+                    "setup_token",
+                    "inference_only",
+                    False,
+                    "2027-01-02T03:04:05Z",
+                ),
+                AuthMethodSnapshot(
+                    "api_key", "inference_only", False, None, True
+                ),
+            ),
         )
         text = account_card_text(acc, 100).plain
         assert text.count("Claude Code") == 3
-        assert "browser OAuth" in text
-        assert "one-year setup token" in text
-        assert "API key  preferred" in text
+        assert "browser OAuth · full access · Remote Control" in text
+        assert "setup token · inference only · no Remote Control" in text
+        assert "API key · inference only · no Remote Control · default" in text
 
     def test_seven_day_ahead_of_pace_marker(self):
         from claude_swap.tui.widgets import mini_account_text

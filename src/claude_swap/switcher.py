@@ -43,6 +43,7 @@ from claude_swap.json_output import (
 from claude_swap.credentials import (  # noqa: F401  (constants re-exported for migrations/tests)
     AUTH_API_KEY,
     AUTH_BROWSER_OAUTH,
+    AUTH_CAPABILITY_REMOTE_CONTROL,
     AUTH_METHOD_LABELS,
     AUTH_SETUP_TOKEN,
     AUTH_UNKNOWN,
@@ -51,6 +52,7 @@ from claude_swap.credentials import (  # noqa: F401  (constants re-exported for 
     ActiveCredentials,
     CredentialStore,
     auth_method_label,
+    auth_method_supports_capability,
     auth_metadata,
     auth_metadata_summary,
     classify_auth_method,
@@ -721,11 +723,12 @@ class ClaudeAccountSwitcher:
         )
         details = []
         for method in methods:
-            method_credentials = self._read_auth_method_credentials(
-                account_num, email, organization_uuid, method
-            )
-            if not method_credentials and classify_auth_method(credentials) == method:
+            if classify_auth_method(credentials) == method:
                 method_credentials = credentials or ""
+            else:
+                method_credentials = self._read_auth_method_credentials(
+                    account_num, email, organization_uuid, method
+                )
             metadata = auth_metadata(method_credentials)
             details.append(
                 AuthMethodSnapshot(
@@ -815,7 +818,7 @@ class ClaudeAccountSwitcher:
         account_num: str,
         credentials: str,
         *,
-        preferred: bool = True,
+        make_default: bool = False,
         auth_method: str | None = None,
     ) -> str:
         """Add or refresh one child login method for an existing account.
@@ -824,7 +827,8 @@ class ClaudeAccountSwitcher:
         backup is copied into child storage before the new secret is written.
         The primary backup remains a compatibility pointer to the preferred
         method, so existing switch, usage, session, and auto-rotation paths keep
-        one account-level credential source.
+        one account-level credential source. Adding or refreshing a method keeps
+        the current default unless ``make_default`` is explicit.
         """
         record = data["accounts"][str(account_num)]
         email = record.get("email", "")
@@ -854,7 +858,7 @@ class ClaudeAccountSwitcher:
         )
         selected = (
             method
-            if preferred or current_preferred == AUTH_UNKNOWN
+            if make_default or current_preferred == AUTH_UNKNOWN
             else current_preferred
         )
         selected_credentials = (
@@ -2534,7 +2538,6 @@ class ClaudeAccountSwitcher:
                 seq,
                 account_num,
                 current_creds,
-                preferred=True,
                 auth_method=AUTH_BROWSER_OAUTH,
             )
             self._write_account_config(account_num, current_email, current_config)
@@ -2689,7 +2692,6 @@ class ClaudeAccountSwitcher:
             data,
             account_num,
             current_creds,
-            preferred=True,
             auth_method=AUTH_BROWSER_OAUTH,
         )
         self._write_account_config(account_num, current_email, current_config)
@@ -2801,7 +2803,6 @@ class ClaudeAccountSwitcher:
                 seq,
                 account_num,
                 credentials,
-                preferred=True,
                 auth_method=AUTH_API_KEY if is_api_key else AUTH_SETUP_TOKEN,
             )
             self._write_account_config(account_num, email, config)
@@ -2904,7 +2905,6 @@ class ClaudeAccountSwitcher:
             data,
             account_num,
             credentials,
-            preferred=True,
             auth_method=AUTH_API_KEY if is_api_key else AUTH_SETUP_TOKEN,
         )
         self._write_account_config(account_num, email, config)
@@ -4992,12 +4992,15 @@ class ClaudeAccountSwitcher:
         json_output: bool = False,
         force: bool = False,
         auth_method: str | None = None,
+        required_capability: str | None = None,
     ) -> dict | None:
         """Switch to specific account.
 
         ``force`` activates the target's stored credentials directly, skipping
         both the already-active no-op guard and the backup-current step —
         the recovery path for a live login gone stale (e.g. after --import).
+        ``required_capability`` selects a login that supports the requested
+        Claude Code feature and fails before mutation when none is stored.
         """
         if not self.sequence_file.exists():
             raise ConfigError("No accounts are managed yet")
@@ -5049,6 +5052,15 @@ class ClaudeAccountSwitcher:
             raise AccountNotFoundError(f"Account-{target_account} does not exist")
 
         requested_method = auth_method.replace("-", "_") if auth_method else None
+        capability = (
+            required_capability.replace("-", "_")
+            if required_capability
+            else None
+        )
+        if capability not in {None, AUTH_CAPABILITY_REMOTE_CONTROL}:
+            raise ValidationError(
+                f"Unsupported Claude Code capability: {required_capability}"
+            )
         target_email = data["accounts"][target_account].get("email", "")
         target_primary = self._read_account_credentials(
             target_account, target_email
@@ -5062,9 +5074,35 @@ class ClaudeAccountSwitcher:
                 f"Account-{target_account} has no {auth_method_label(requested_method)} "
                 f"login. Available: {available or 'none'}"
             )
-        selected_method = requested_method or self._preferred_auth_method(
+        default_method = self._preferred_auth_method(
             target_account, credentials=target_primary, data=data
         )
+        if requested_method is not None:
+            selected_method = requested_method
+        elif capability is not None:
+            ordered_methods = (default_method,) + tuple(
+                method for method in available_methods if method != default_method
+            )
+            selected_method = next(
+                (
+                    method
+                    for method in ordered_methods
+                    if auth_method_supports_capability(method, capability)
+                ),
+                AUTH_UNKNOWN,
+            )
+        else:
+            selected_method = default_method
+
+        if capability is not None and not auth_method_supports_capability(
+            selected_method, capability
+        ):
+            if capability == AUTH_CAPABILITY_REMOTE_CONTROL:
+                raise ValidationError(
+                    f"Remote Control requires browser OAuth for Account-"
+                    f"{target_account}. Run 'claude auth login', then "
+                    f"'cswap add --slot {target_account}'."
+                )
 
         # Short-circuit a no-op before mutating (issue #79). A self-switch
         # would first back up the live credentials into the target slot —
@@ -5085,10 +5123,7 @@ class ClaudeAccountSwitcher:
                 current_preferred = self._preferred_auth_method(
                     target_account, credentials=target_primary, data=data
                 )
-                method_change = (
-                    requested_method is not None
-                    and requested_method != current_preferred
-                )
+                method_change = selected_method != current_preferred
                 if cur_slot == target_account and not method_change:
                     action, provenance = self._self_switch_action(
                         target_account, identity[0]
