@@ -51,6 +51,8 @@ from claude_swap.credentials import (  # noqa: F401  (constants re-exported for 
     ActiveCredentials,
     CredentialStore,
     auth_method_label,
+    auth_metadata,
+    auth_metadata_summary,
     classify_auth_method,
     looks_like_api_key,
     merge_shared_credential_fields,
@@ -61,6 +63,7 @@ from claude_swap.logging_config import setup_logging
 from claude_swap.models import (
     AccountSnapshot,
     AccountsSnapshot,
+    AuthMethodSnapshot,
     Platform,
     SwitchTransaction,
     get_timestamp,
@@ -698,6 +701,42 @@ class ClaudeAccountSwitcher:
         if preferred in methods:
             return preferred
         return methods[0] if methods else AUTH_UNKNOWN
+
+    def _auth_method_snapshots(
+        self,
+        account_num: str,
+        email: str,
+        organization_uuid: str,
+        *,
+        credentials: str | None = None,
+        data: dict | None = None,
+    ) -> tuple[AuthMethodSnapshot, ...]:
+        """Return safe display metadata for every login stored by an account."""
+        data = data if data is not None else (self._get_sequence_data() or {})
+        methods = self._account_auth_methods(
+            account_num, credentials=credentials, data=data
+        )
+        default = self._preferred_auth_method(
+            account_num, credentials=credentials, data=data
+        )
+        details = []
+        for method in methods:
+            method_credentials = self._read_auth_method_credentials(
+                account_num, email, organization_uuid, method
+            )
+            if not method_credentials and classify_auth_method(credentials) == method:
+                method_credentials = credentials or ""
+            metadata = auth_metadata(method_credentials)
+            details.append(
+                AuthMethodSnapshot(
+                    method=method,
+                    scope=metadata.scope,
+                    supports_remote_control=metadata.supports_remote_control,
+                    expires_at=metadata.expires_at,
+                    is_default=method == default,
+                )
+            )
+        return tuple(details)
 
     def _read_auth_method_credentials(
         self, account_num: str, email: str, organization_uuid: str, auth_method: str
@@ -1720,8 +1759,23 @@ class ClaudeAccountSwitcher:
             preferred = self._preferred_auth_method(
                 n, credentials=_creds, data=seq_data
             )
-            methods = self._account_auth_methods(
-                n, credentials=_creds, data=seq_data
+            details = self._auth_method_snapshots(
+                n,
+                email,
+                org_uuid,
+                credentials=_creds,
+                data=seq_data,
+            )
+            fallback = auth_metadata(_creds)
+            selected = next(
+                (detail for detail in details if detail.method == preferred),
+                AuthMethodSnapshot(
+                    fallback.method,
+                    fallback.scope,
+                    fallback.supports_remote_control,
+                    fallback.expires_at,
+                    True,
+                ),
             )
             accounts.append(
                 AccountSnapshot(
@@ -1734,7 +1788,12 @@ class ClaudeAccountSwitcher:
                     switchable=self._account_is_switchable(n),
                     usage=entries[n],
                     auth_method=preferred,
-                    auth_methods=methods or (preferred,),
+                    auth_methods=tuple(detail.method for detail in details)
+                    or (selected.method,),
+                    auth_scope=selected.scope,
+                    auth_supports_remote_control=selected.supports_remote_control,
+                    auth_expires_at=selected.expires_at,
+                    auth_method_details=details or (selected,),
                     alias=alias,
                     disabled=self._disabled_from_data(seq_data, n),
                 )
@@ -4152,6 +4211,24 @@ class ClaudeAccountSwitcher:
             methods = self._account_auth_methods(
                 str(num), credentials=creds, data=seq_data
             )
+            details = self._auth_method_snapshots(
+                str(num),
+                email,
+                org_uuid,
+                credentials=creds,
+                data=seq_data,
+            )
+            fallback = auth_metadata(creds)
+            selected = next(
+                (detail for detail in details if detail.method == preferred),
+                AuthMethodSnapshot(
+                    fallback.method,
+                    fallback.scope,
+                    fallback.supports_remote_control,
+                    fallback.expires_at,
+                    True,
+                ),
+            )
             accounts.append(
                 account_row(
                     num, email, org_name, org_uuid, is_active,
@@ -4161,6 +4238,23 @@ class ClaudeAccountSwitcher:
                     last_good_usage=entry.last_good,
                     auth_method=preferred,
                     auth_methods=list(methods or (preferred,)),
+                    auth_scope=selected.scope,
+                    auth_supports_remote_control=selected.supports_remote_control,
+                    auth_expires_at=selected.expires_at,
+                    auth_method_details=[
+                        {
+                            "method": detail.method,
+                            "scope": detail.scope,
+                            "supportsRemoteControl": detail.supports_remote_control,
+                            **(
+                                {"expiresAt": detail.expires_at}
+                                if detail.expires_at
+                                else {}
+                            ),
+                            **({"default": True} if detail.is_default else {}),
+                        }
+                        for detail in details
+                    ],
                     alias=alias,
                     disabled=self._disabled_from_data(seq_data, str(num)),
                 )
@@ -4231,14 +4325,33 @@ class ClaudeAccountSwitcher:
             preferred = self._preferred_auth_method(
                 str(num), credentials=creds, data=seq_data
             )
-            methods = self._account_auth_methods(
-                str(num), credentials=creds, data=seq_data
+            details = self._auth_method_snapshots(
+                str(num),
+                email,
+                org_uuid,
+                credentials=creds,
+                data=seq_data,
             )
-            for method in methods or (AUTH_UNKNOWN,):
-                marker = " (preferred)" if method == preferred and len(methods) > 1 else ""
+            if not details:
+                auth = auth_metadata(creds)
+                details = (
+                    AuthMethodSnapshot(
+                        auth.method,
+                        auth.scope,
+                        auth.supports_remote_control,
+                        auth.expires_at,
+                        True,
+                    ),
+                )
+            for detail in details:
+                marker = (
+                    " · default"
+                    if detail.method == preferred and len(details) > 1
+                    else ""
+                )
                 print(
                     f"     {dimmed('Claude Code:')} "
-                    f"{muted(auth_method_label(method) + marker)}"
+                    f"{muted(auth_metadata_summary(detail) + marker)}"
                 )
             for line in _usage_entry_lines(entries[str(num)]):
                 print(f"     {line}")

@@ -197,8 +197,17 @@ class TestListJson:
         sample_sequence_data: dict, capsys,
     ):
         sample_sequence_data["accounts"]["1"]["email"] = "test@example.com"
+        expires_at = int(
+            datetime(2027, 1, 2, 3, 4, 5, tzinfo=timezone.utc).timestamp()
+            * 1000
+        )
         active_creds = json.dumps(
-            {"claudeAiOauth": {"accessToken": "sk-ant-oat01-active"}}
+            {
+                "claudeAiOauth": {
+                    "accessToken": "sk-ant-oat01-active",
+                    "expiresAt": expires_at,
+                }
+            }
         )
         backup_creds = json.dumps({"claudeAiOauth": {"accessToken": "sk-backup"}})
         usage = {
@@ -225,6 +234,18 @@ class TestListJson:
         assert acct1["usageStatus"] == "ok"
         assert acct1["authMethod"] == "setup_token"
         assert acct1["authMethods"] == ["setup_token"]
+        assert acct1["authScope"] == "inference_only"
+        assert acct1["supportsRemoteControl"] is False
+        assert acct1["authExpiresAt"] == "2027-01-02T03:04:05Z"
+        assert acct1["authMethodDetails"] == [
+            {
+                "method": "setup_token",
+                "scope": "inference_only",
+                "supportsRemoteControl": False,
+                "expiresAt": "2027-01-02T03:04:05Z",
+                "default": True,
+            }
+        ]
         assert acct1["usage"]["fiveHour"]["resetsAt"] == "2026-01-01T00:00:00Z"
 
     def test_list_payload_includes_alias(

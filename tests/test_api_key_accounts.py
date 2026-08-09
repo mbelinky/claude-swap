@@ -9,6 +9,7 @@ display, the ``cswap run`` session guard, and export/import of raw keys.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -18,10 +19,13 @@ from claude_swap import session as session_mod
 from claude_swap.credentials import (
     AUTH_API_KEY,
     AUTH_BROWSER_OAUTH,
+    AUTH_SCOPE_FULL,
+    AUTH_SCOPE_INFERENCE_ONLY,
     AUTH_SETUP_TOKEN,
     CLAUDE_CODE_KEYCHAIN_SERVICE,
     CLAUDE_CODE_MANAGED_KEYCHAIN_SERVICE,
     approved_form,
+    auth_metadata,
     classify_auth_method,
     looks_like_api_key,
 )
@@ -67,20 +71,45 @@ def _read_global_config() -> dict:
 
 class TestKindDetection:
     def test_classifies_every_supported_auth_method(self):
+        expires_at = int(
+            datetime(2027, 1, 2, 3, 4, 5, tzinfo=timezone.utc).timestamp()
+            * 1000
+        )
         browser = json.dumps(
             {
                 "claudeAiOauth": {
                     "accessToken": "sk-ant-oat01-browser",
                     "refreshToken": "refresh",
+                    "expiresAt": expires_at,
                 }
             }
         )
         setup = json.dumps(
-            {"claudeAiOauth": {"accessToken": "sk-ant-oat01-setup"}}
+            {
+                "claudeAiOauth": {
+                    "accessToken": "sk-ant-oat01-setup",
+                    "expiresAt": expires_at,
+                }
+            }
         )
         assert classify_auth_method(browser) == AUTH_BROWSER_OAUTH
         assert classify_auth_method(setup) == AUTH_SETUP_TOKEN
         assert classify_auth_method(API_KEY) == AUTH_API_KEY
+
+        browser_info = auth_metadata(browser)
+        assert browser_info.scope == AUTH_SCOPE_FULL
+        assert browser_info.supports_remote_control is True
+        assert browser_info.expires_at is None
+
+        setup_info = auth_metadata(setup)
+        assert setup_info.scope == AUTH_SCOPE_INFERENCE_ONLY
+        assert setup_info.supports_remote_control is False
+        assert setup_info.expires_at == "2027-01-02T03:04:05Z"
+
+        api_key_info = auth_metadata(API_KEY)
+        assert api_key_info.scope == AUTH_SCOPE_INFERENCE_ONLY
+        assert api_key_info.supports_remote_control is False
+        assert api_key_info.expires_at is None
 
     def test_api_key_detected(self):
         assert looks_like_api_key(API_KEY) is True

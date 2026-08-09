@@ -335,8 +335,17 @@ cswap switch 2 --auth-method setup-token
   "activeAccountNumber": 2,
   "accounts": [
     { "number": 2, "email": "you@example.com", "active": true,
-      "authMethod": "setup_token",
-      "authMethods": ["browser_oauth", "setup_token"], "usageStatus": "ok",
+      "authMethod": "setup_token", "authScope": "inference_only",
+      "supportsRemoteControl": false, "authExpiresAt": "2027-01-02T03:04:05Z",
+      "authMethods": ["browser_oauth", "setup_token"],
+      "authMethodDetails": [
+        { "method": "browser_oauth", "scope": "full",
+          "supportsRemoteControl": true },
+        { "method": "setup_token", "scope": "inference_only",
+          "supportsRemoteControl": false, "expiresAt": "2027-01-02T03:04:05Z",
+          "default": true }
+      ],
+      "usageStatus": "ok",
       "usage": { "fiveHour": { "pct": 25.0, "resetsAt": "2026-06-22T23:29:59Z" },
                  "sevenDay": { "pct": 16.0, "resetsAt": "2026-06-26T17:59:59Z" } } }
   ]
@@ -347,14 +356,19 @@ Every payload carries a `schemaVersion` (currently `1`); on a handled error stdo
 
 Usage is served from a per-account cache: when the usage API is briefly unreachable, the last-known numbers are shown instead of nothing (the human view marks them with their age, e.g. `· 2m ago`). Rows with decision-trusted usage carry additive `usageFetchedAt`/`usageAgeSeconds` fields telling you how old the measurement is. Whenever `usage` is null but a last-known measurement exists — data too old to drive a decision (`usageStatus` stays `unavailable`), or a row in a non-`ok` state such as `token_expired` — additive `lastGoodUsage`/`lastGoodFetchedAt`/`lastGoodAgeSeconds` fields preserve the human display without making the account actionable. These fields apply to list rows and the managed active row from `status --json`. An account held out of rotation with `cswap disable` carries an additive `"disabled": true` on its row (absent otherwise).
 
-Each account row carries an additive `authMethod`, the preferred Claude Code
-login, plus `authMethods`, every stored login for that account. Values are
-`browser_oauth`, `setup_token`, `api_key`, or `unknown`. The human list and TUI
-group these logins under one account and show account usage once. Use
+Each account row carries additive authentication metadata. `authMethod` is
+`browser_oauth`, `setup_token`, `api_key`, or `unknown`; `authScope` is `full`,
+`inference_only`, or `unknown`; and `supportsRemoteControl` reports whether the
+login can start Remote Control. Setup-token rows also carry their actual
+`authExpiresAt` when the credential includes one. Browser OAuth is the full
+Claude Code login. Setup tokens and API keys are inference-only and cannot start
+Remote Control. `authMethods` lists every stored login, while
+`authMethodDetails` reports the capability and expiry of each one. The human
+list and TUI group these logins under one account and show usage once. Use
 `cswap switch N --auth-method setup-token` (or `browser-oauth` / `api-key`) to
-choose a specific login and make it preferred. An account row also carries an
-additive `alias` field once one is set with `cswap alias` (e.g.
-`"alias": "dev"`); accounts without one simply omit the key.
+choose a specific default. An account row also carries an additive `alias`
+field once one is set with `cswap alias` (e.g. `"alias": "dev"`); accounts
+without one simply omit the key.
 
 Weekly windows (`sevenDay` and per-model `scoped` entries — never `fiveHour`) additively carry pace fields once the week is ~a day old: `expectedPct` (where usage would sit if spread evenly across the week) and `aheadOfPace` (`true` when meaningfully above that — the same signal the human views show as an `(ahead)`/`(ahead of pace)` marker). `projectedExhaustionAt`/`willLastToReset` extrapolate the current rate into an ETA to 100% and a yes/no "will it last to the reset"; they stay `--json`-only since a linear projection is too rough to present as fact in the UI.
 
