@@ -219,6 +219,59 @@ class TestDesktopProfileStore:
         assert registry["profiles"][ACCOUNT_A]["isDefault"] is True
         assert registry["profiles"][ACCOUNT_B]["initialized"] is False
 
+    def test_never_adopts_a_profile_another_account_owns(self, tmp_path):
+        default = tmp_path / "Application Support" / "Claude"
+        (default / "claude-code-sessions").mkdir(parents=True)
+        backup = tmp_path / "backup"
+        store = DesktopProfileStore(backup, default_profile_dir=default)
+        store.resolve(
+            ACCOUNT_A,
+            "old@example.com",
+            current_account_uuid=ACCOUNT_A,
+            current_email="old@example.com",
+            current_profile_dir=default,
+        )
+
+        profile = store.resolve(
+            ACCOUNT_B,
+            "user@example.com",
+            current_account_uuid=ACCOUNT_B,
+            current_email="user@example.com",
+            current_profile_dir=default,
+        )
+
+        assert profile.path == backup / "desktop" / ACCOUNT_B
+        assert profile.is_default is False
+        assert profile.initialized is False
+        registry = json.loads(store.registry_path.read_text(encoding="utf-8"))
+        assert registry["profiles"][ACCOUNT_A]["path"] == str(default)
+        assert registry["profiles"][ACCOUNT_B]["path"] == str(
+            backup / "desktop" / ACCOUNT_B
+        )
+
+    def test_owner_of_matches_registered_profile_dir(self, tmp_path):
+        default = tmp_path / "Application Support" / "Claude"
+        (default / "claude-code-sessions").mkdir(parents=True)
+        store = DesktopProfileStore(tmp_path / "backup", default_profile_dir=default)
+
+        assert store.owner_of(default) is None
+        assert not store.registry_path.exists()
+
+        store.resolve(
+            ACCOUNT_A,
+            "old@example.com",
+            current_account_uuid=ACCOUNT_A,
+            current_email="old@example.com",
+            current_profile_dir=default,
+        )
+
+        assert store.owner_of(default) == (ACCOUNT_A, "old@example.com")
+        assert store.owner_of(default / ".." / "Claude") == (
+            ACCOUNT_A,
+            "old@example.com",
+        )
+        assert store.owner_of(tmp_path / "elsewhere") is None
+
     def test_refuses_to_replace_private_session_data(self, tmp_path):
         default = tmp_path / "Claude"
         (default / "claude-code-sessions").mkdir(parents=True)
@@ -430,6 +483,44 @@ class TestDesktopManager:
         store.mark_initialized.assert_called_once_with(target)
         assert payload["loginRequired"] is False
         assert payload["sessions"]["copied"] == 2
+
+    def test_registered_profile_beats_the_cli_login(self):
+        switcher = _switcher()
+        switcher._get_sequence_data.return_value = {
+            "accounts": {"1": {"uuid": ACCOUNT_A}}
+        }
+        syncer = MagicMock()
+        syncer.claude_config_dir = Path("/tmp/claude-test")
+        syncer.sync.return_value = DesktopSyncResult()
+        store = MagicMock()
+        store.default_profile_dir = Path("/default")
+        store.owner_of.return_value = (ACCOUNT_A, "old@example.com")
+        original = DesktopProfile(
+            ACCOUNT_A, "old@example.com", Path("/default"), True, True
+        )
+        target = DesktopProfile(
+            ACCOUNT_B, "user@example.com", Path("/profiles/b"), False, False
+        )
+        store.resolve.side_effect = [original, target]
+        manager = DesktopManager(switcher, syncer=syncer, profile_store=store)
+
+        with patch("claude_swap.desktop.sys.platform", "darwin"), \
+             patch.object(manager, "_blocking_sessions", return_value=[]), \
+             patch.object(manager, "_desktop_is_running", return_value=True), \
+             patch.object(manager, "_live_identity", return_value=(ACCOUNT_B, "user@example.com")), \
+             patch.object(manager, "_running_profile_dir", return_value=Path("/default")), \
+             patch.object(manager, "_quit_desktop") as quit_desktop, \
+             patch.object(manager, "_launch_desktop") as launch, \
+             patch.object(manager, "_profile_matches_account", return_value=False):
+            payload = manager.run("2", json_output=True)
+
+        first, second = store.resolve.call_args_list
+        assert first.args == (ACCOUNT_A, "old@example.com")
+        assert first.kwargs["current_account_uuid"] == ACCOUNT_A
+        assert second.kwargs["current_account_uuid"] == ACCOUNT_A
+        quit_desktop.assert_called_once_with()
+        launch.assert_called_once_with(target)
+        assert payload["alreadyActive"] is False
 
     def test_new_profile_opens_for_one_time_login(self):
         switcher = _switcher()

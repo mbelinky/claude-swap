@@ -23,6 +23,7 @@ then launches the target account's authenticated Desktop profile.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import plistlib
 import re
@@ -47,6 +48,8 @@ from claude_swap.settings import atomic_write_json
 if TYPE_CHECKING:
     from claude_swap.switcher import ClaudeAccountSwitcher
 
+
+_logger = logging.getLogger("claude-swap")
 
 CLAUDE_DESKTOP_BUNDLE_ID = "com.anthropic.claudefordesktop"
 CLAUDE_DESKTOP_EXECUTABLE = Path(
@@ -140,6 +143,27 @@ class DesktopProfileStore:
     def _save(self, data: dict) -> None:
         atomic_write_json(self.registry_path, data)
 
+    @staticmethod
+    def _find_owner(profiles: dict, profile_dir: Path) -> tuple[str, str] | None:
+        try:
+            target = profile_dir.resolve()
+            for account_uuid, record in profiles.items():
+                path_value = record.get("path") if isinstance(record, dict) else None
+                if isinstance(path_value, str) and Path(path_value).resolve() == target:
+                    email = record.get("email")
+                    return account_uuid, email if isinstance(email, str) else ""
+        except OSError:
+            return None
+        return None
+
+    def owner_of(self, profile_dir: Path) -> tuple[str, str] | None:
+        """(uuid, email) of the account whose record names ``profile_dir``, or None."""
+        try:
+            profiles = self._load()["profiles"]
+        except DesktopError:
+            return None
+        return self._find_owner(profiles, profile_dir)
+
     def _managed_profile_path(self, account_uuid: str) -> Path:
         return self.root / account_uuid
 
@@ -197,12 +221,25 @@ class DesktopProfileStore:
         current_profile_dir: Path,
         dry_run: bool = False,
     ) -> DesktopProfile:
-        """Resolve a profile, adopting the current profile and creating targets."""
+        """Resolve a profile, adopting the current profile and creating targets.
+
+        The running profile is adopted only if no other account's record
+        already names it: one Electron profile is signed into one account,
+        and ``current_account_uuid`` may come from the CLI login, which can
+        differ from Desktop's.
+        """
         data = self._load()
         profiles = data["profiles"]
         changed = False
+        owner = self._find_owner(profiles, current_profile_dir)
+        current_dir_owner = owner[0] if owner else None
+        adoptable = current_dir_owner in (None, current_account_uuid)
 
-        if current_account_uuid and current_account_uuid not in profiles:
+        if (
+            current_account_uuid
+            and current_account_uuid not in profiles
+            and adoptable
+        ):
             current = DesktopProfile(
                 account_uuid=current_account_uuid,
                 email=current_email,
@@ -226,7 +263,7 @@ class DesktopProfileStore:
                 )
                 profiles[account_uuid] = self._record(profile)
                 changed = True
-        elif current_account_uuid == account_uuid:
+        elif current_account_uuid == account_uuid and adoptable:
             profile = DesktopProfile(
                 account_uuid=account_uuid,
                 email=email,
@@ -498,6 +535,21 @@ class DesktopManager:
                 return Path(match.group(1))
         return self.profile_store.default_profile_dir
 
+    def _profile_owner(self, profile_dir: Path) -> tuple[str, str] | None:
+        """Registry owner of ``profile_dir``; None when unknown or unreadable."""
+        try:
+            owner = self.profile_store.owner_of(profile_dir)
+        except Exception as exc:  # the CLI login is a safe fallback
+            _logger.debug("Desktop profile owner lookup failed: %s", exc)
+            return None
+        if (
+            isinstance(owner, tuple)
+            and len(owner) == 2
+            and all(isinstance(part, str) for part in owner)
+        ):
+            return owner
+        return None
+
     @staticmethod
     def _live_identity() -> tuple[str | None, str]:
         path = get_default_global_config_path()
@@ -668,6 +720,15 @@ class DesktopManager:
         was_running = self._desktop_is_running()
         current_uuid, current_email = self._live_identity()
         current_profile_dir = self._running_profile_dir()
+        if was_running:
+            # ~/.claude.json is the CLI's login, which `cswap add` and
+            # `cswap switch` change without touching Desktop. A profile dir
+            # the registry already names was signed into that account, so its
+            # record wins; the CLI login is only a guess for a profile cswap
+            # has not seen yet.
+            owner = self._profile_owner(current_profile_dir)
+            if owner is not None:
+                current_uuid, current_email = owner
         running_uuid = current_uuid if was_running else None
         original_profile = None
         if running_uuid:
